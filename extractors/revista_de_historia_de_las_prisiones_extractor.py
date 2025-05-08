@@ -1,127 +1,141 @@
 import pymupdf
 from pymupdf4llm import to_markdown
+import pypandoc
+import panflute
+import io
 import re
-from typing import List, Dict, Optional
+from typing import Dict
 
 SPANISH_KEYWORDS = ["palabras clave", "palavras-chave"]
 ENGLISH_KEYWORDS = ["keywords", "key words", "keyword", "key-words"]
-ABSTRACT_STOPPERS = SPANISH_KEYWORDS + ENGLISH_KEYWORDS + ["nº"]
 ABSTRACTS = ["resumen", "abstract", "resumo"]
 NON_NAME_WORDS = ['universidad', 'institución', 'argentina', 'institute', 'nacional', 'departamento', 'buenos aires', 'ciudad', 'méxico', 'entrevista']
 
 
-def extract_text_lines(pdf_path: str, return_doc: bool = False) -> List[str] | tuple[List[str], pymupdf.Document, str]:
+def extract_text_lines(pdf_path: str) -> panflute.elements.Doc:
     doc = pymupdf.open(pdf_path)
     markdown = to_markdown(doc)
-    full_text = "\n".join(page.get_text() for page in doc)
-    lines = [l.strip() for l in full_text.splitlines() if l.strip()]
-    return (lines, doc, markdown) if return_doc else lines
+    pandoc_json = pypandoc.convert_text(markdown, 'json', format='md')
+    doc_panflute = panflute.load(io.StringIO(pandoc_json))
+    return doc_panflute
 
 
-def extract_title(markdown: str) -> Dict[str, str]:
-    headings = re.findall(r'^(#+)\s+(.*)', markdown, re.MULTILINE)
+def extract_title(doc: panflute.elements.Doc) -> Dict[str, str]:
+    title = None
+    is_review = False
 
-    if not headings:
-        return {}
+    for elem in doc.content:
+        if isinstance(elem, panflute.Para):
+            text = panflute.stringify(elem)
+            if re.search(r'\bRESEÑAS?\b', text, re.IGNORECASE):
+                is_review = True
 
-    heading_levels = {}
-    for level, heading in headings:
-        level_len = len(level)
-        heading_levels.setdefault(level_len, []).append(heading.strip())
-
-    if len(heading_levels) >= 3 and 2 in heading_levels:
-        titles = heading_levels[2]
-    else:
-        titles = heading_levels.get(1, [])
-
-    return {"title": titles[0]} if titles else {}
-
-def extract_keywords(lines: List[str]) -> Dict[str, str]:
-    result = {}
-    for i, line in enumerate(lines):
-        line_lower = line.lower()
-        if not result.get("keywords_es") and any(k in line_lower for k in SPANISH_KEYWORDS):
-            if i + 1 < len(lines):
-                result["keywords_es"] = lines[i + 1].strip().replace(';', ',')
-        elif not result.get("keywords_en") and any(k in line_lower for k in ENGLISH_KEYWORDS):
-            if i + 1 < len(lines):
-                result["keywords_en"] = lines[i + 1].strip().replace(';', ',')
-    return result
-
-def extract_metadata(first_two_pages: List[str]) -> Dict[str, str]:
-    data = {}
-    for line in first_two_pages:
-        line = line.strip()
-        if "issn" not in data:
-            if (m := re.search(r'(?i)ISSN[:\s]*([\d]{4}-[\d]{4})', line)):
-                data["issn"] = m.group(1)
-        if "publication" not in data or "volume" not in data or "publishing_date" not in data:
-            if (m := re.search(r'(.+)\s+nº\s*(\d+)\s*\((.*\d{4})\)', line)):
-                data["publication"] = m.group(1).strip()
-                data["volume"] = m.group(2).strip()
-                data["publishing_date"] = m.group(3).strip()
-        if "pages" not in data:
-            if (m := re.search(r'pp\.\s*(\d+)-(\d+)', line)):
-                data["pages"] = f"{m.group(1)}-{m.group(2)}"
-
-        for line in first_two_pages[:10]:
-            if re.search(r'\bRESEÑAS?\b', line, re.IGNORECASE):
-                data["tags"] = "RezensionsTagPica"
+    for elem in doc.content:
+        if isinstance(elem, panflute.Header):
+            if is_review and elem.level == 2:
+                title = panflute.stringify(elem).strip()
                 break
-    
+            elif not is_review and elem.level == 1:
+                title = panflute.stringify(elem).strip()
+                break
+
+    return {"title": title} if title else {}
+
+def extract_keywords(doc: panflute.elements.Doc) -> Dict[str, str]:
+    data = {}
+    next_is_keywords_es = False
+    next_is_keywords_en = False
+
+    for elem in doc.content:
+        if not isinstance(elem, panflute.Para):
+            continue
+
+        text = panflute.stringify(elem).strip()
+        text_lower = text.lower()
+
+        if next_is_keywords_es and "keywords_es" not in data:
+            data["keywords_es"] = text.replace(';', ',')
+            next_is_keywords_es = False
+            continue
+
+        if next_is_keywords_en and "keywords_en" not in data:
+            data["keywords_en"] = text.replace(';', ',')
+            next_is_keywords_en = False
+            continue
+
+        if any(keyword in text_lower for keyword in SPANISH_KEYWORDS):
+            next_is_keywords_es = True
+        elif any(keyword in text_lower for keyword in ENGLISH_KEYWORDS):
+            next_is_keywords_en = True
+
     return data
 
-def extract_abstracts(first_two_pages: List[str], publication: Optional[str] = None) -> Dict[str, str]:
+def extract_metadata(doc: panflute.elements.Doc) -> Dict[str, str]:
     data = {}
-    abstract_lines_es = []
-    abstract_lines_en = []
-    collecting_es = collecting_en = False
 
-    stop_words = ABSTRACT_STOPPERS[:]
-    if publication:
-        stop_words.append(publication.lower())
+    for elem in doc.content:
+        if not isinstance(elem, panflute.Para):
+            continue
 
-    for line in first_two_pages:
-        lower_line = line.lower()
-        if not data.get("abstract_es"):
-            if "resumen" in lower_line or "resumo" in lower_line:
-                collecting_es = True
-                continue
-            if collecting_es:
-                if any(stop in lower_line for stop in stop_words):
-                    collecting_es = False
-                    continue
-                abstract_lines_es.append(line)
-        if not data.get("abstract_en"):
-            if "abstract" in lower_line and "resumen" not in lower_line:
-                collecting_en = True
-                continue
-            if collecting_en:
-                if any(stop in lower_line for stop in stop_words):
-                    collecting_en = False
-                    continue
-                abstract_lines_en.append(line)
+        text = panflute.stringify(elem).strip()
 
-    if abstract_lines_es:
-        data["abstract_es"] = " ".join(abstract_lines_es).strip()
-    if abstract_lines_en:
-        data["abstract_en"] = " ".join(abstract_lines_en).strip()
+        if "tags" not in data and re.search(r'\bRESEÑAS?\b', text, re.IGNORECASE):
+            data["tags"] = "RezensionsTagPica"
+
+        if "issn" not in data:
+            m = re.search(r'(?i)ISSN[:\s]*([\d]{4}-[\d]{4})', text)
+            if m:
+                data["issn"] = m.group(1)
+
+        m = re.search(r'nº\s*(\d+)\s*\(([^)]+?\d{4})\)', text, re.IGNORECASE)
+        if m:
+            data["volume"] = m.group(1).strip()
+            data["publishing_date"] = m.group(2).strip()
+
+        m = re.search(r'pp\.\s*(\d+)[–-](\d+)', text, re.IGNORECASE)
+        if m:
+            data["pages"] = f"{m.group(1)}-{m.group(2)}"
+
+    return data
+
+def extract_abstracts(doc: panflute.elements.Doc) -> Dict[str, str]:
+    data = {}
+    next_is_abstract_es = False
+    next_is_abstract_en = False
+
+    for elem in doc.content:
+        if not isinstance(elem, panflute.Para):
+            continue
+
+        text = panflute.stringify(elem).strip()
+
+        if next_is_abstract_es and "abstract_es" not in data:
+            data["abstract_es"] = text
+            next_is_abstract_es = False
+            continue
+
+        if next_is_abstract_en and "abstract_en" not in data:
+            data["abstract_en"] = text
+            next_is_abstract_en = False
+            continue
+
+        lower_text = text.lower()
+        if lower_text.startswith(("resumen", "resumo")):
+            next_is_abstract_es = True
+        elif lower_text.startswith("abstract"):
+            next_is_abstract_en = True
 
     return data
 
 
 def extract_bibliographic_data(pdf_path: str) -> Dict[str, str]:
-    lines, doc, markdown = extract_text_lines(pdf_path, return_doc=True)
-
-    page1_lines = doc[0].get_text().splitlines()
-    page2_lines = doc[1].get_text().splitlines() if len(doc) > 1 else []
-    first_two_pages = page1_lines + page2_lines
+    doc = extract_text_lines(pdf_path)
 
     data = {}
 
-    data.update(extract_title(markdown))
-    data.update(extract_keywords(lines))
-    data.update(extract_metadata(first_two_pages))
-    data.update(extract_abstracts(first_two_pages, data.get("publication")))
+    data.update(extract_title(doc))
+    data.update(extract_keywords(doc))
+    data.update(extract_metadata(doc))
+    data.update(extract_abstracts(doc))
 
     return data
