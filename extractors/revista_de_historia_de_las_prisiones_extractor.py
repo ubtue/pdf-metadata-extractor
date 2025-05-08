@@ -77,7 +77,7 @@ def extract_metadata(doc: panflute.elements.Doc) -> Dict[str, str]:
         text = panflute.stringify(elem).strip()
 
         if "tags" not in data and re.search(r'\bRESEÑAS?\b', text, re.IGNORECASE):
-            data["tags"] = "RezensionsTagPica"
+            data["tags"] = "RezensionstagPica"
 
         if "issn" not in data:
             m = re.search(r'(?i)ISSN[:\s]*([\d]{4}-[\d]{4})', text)
