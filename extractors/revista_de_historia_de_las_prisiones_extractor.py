@@ -8,9 +8,6 @@ from typing import Dict
 
 SPANISH_KEYWORDS = ["palabras clave", "palavras-chave"]
 ENGLISH_KEYWORDS = ["keywords", "key words", "keyword", "key-words"]
-ABSTRACTS = ["resumen", "abstract", "resumo"]
-NON_NAME_WORDS = ['universidad', 'institución', 'argentina', 'institute', 'nacional', 'departamento', 'buenos aires', 'ciudad', 'méxico', 'entrevista']
-
 
 def extract_text_lines(pdf_path: str) -> panflute.elements.Doc:
     doc = pymupdf.open(pdf_path)
