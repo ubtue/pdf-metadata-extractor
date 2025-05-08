@@ -1,0 +1,7 @@
+flask==3.1.0
+flask_cors==5.0.1
+requests==2.25.1
+pymupdf==1.25.5
+pymupdf4llm==0.0.18
+pypandoc==1.15
+panflute==2.3.1
