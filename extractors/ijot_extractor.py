@@ -11,7 +11,7 @@ PUA_MAP = {
 }
 
 AUTHOR_BIO_PATTERNS = [
-    r"\bPhD\b", r"\bDr\b", r"\bProf\b", r"\bcandidate\b", r"\bPostgraduate\b", r"\bTeaching Associate\b",
+    r"\bPhD\b", r"\bDr\b", r"\bProf\b", r"\bProfessor\b", r"\bcandidate\b", r"\bPostgraduate\b", r"\bTeaching Associate\b",
     r"\bDepartment\b", r"\bUniversity\b", r"\bUnited Kingdom\b", r"\bGermany\b",
     r"\bSweden\b", r"\bNorway\b"
 ]
@@ -60,25 +60,11 @@ def clean_text(text: str) -> str:
     text = re.sub(r'\s+([.,;:!?])', r'\1', text)
     return text.strip()
 
-def remove_author_bio(lines):
-    clean_lines = []
-    skip_block = False
-    for line in lines:
-        if any(re.search(pat, line, re.IGNORECASE) for pat in AUTHOR_BIO_PATTERNS):
-            skip_block = True
-            continue
-        if skip_block and not line.strip():
-            skip_block = False
-            continue
-        if not skip_block:
-            clean_lines.append(line)
-    return clean_lines
-
 def extract_abstract(lines, author_bio_patterns):
     abstract_lines = []
     in_abstract = False
     skip_block = False
-    skip_next_nonempty_line = False
+    skip_until_page_number = False
 
     for line in lines:
         lower = line.lower().strip()
@@ -92,8 +78,6 @@ def extract_abstract(lines, author_bio_patterns):
 
         if lower.startswith("keywords") or lower.startswith("schlagwörter"):
             break
-        if re.match(r'^\d+\s+\w', line):
-            break
 
         if any(re.search(pat, line, re.IGNORECASE) for pat in author_bio_patterns):
             skip_block = True
@@ -105,19 +89,16 @@ def extract_abstract(lines, author_bio_patterns):
             continue
 
         if lower.startswith("# page"):
-            skip_next_nonempty_line = True
+            skip_until_page_number = True
             continue
 
-        if skip_next_nonempty_line:
-            if line.strip():
-                skip_next_nonempty_line = False
-                continue
-            else:
-                continue
-
-        if line.strip().isdigit():
+        if skip_until_page_number:
+            if re.fullmatch(r"\d{1,4}", line.strip()):
+                skip_until_page_number = False
             continue
 
+        if re.fullmatch(r"\d{1,4}", line.strip()):
+            continue
         if line.strip().startswith('---'):
             continue
 
